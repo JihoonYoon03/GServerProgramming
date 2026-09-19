@@ -142,7 +142,10 @@
     <ClInclude Include="Common.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="IPAddr.cpp" />
+    <ClCompile Include="Domain.cpp" />
+    <ClCompile Include="IPAddr.cpp">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
+    </ClCompile>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
