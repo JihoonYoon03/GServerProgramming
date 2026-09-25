@@ -5,10 +5,10 @@
 #include <winsock2.h> // 윈속2 메인 헤더
 #include <ws2tcpip.h> // 윈속2 확장 헤더
 
-#include <tchar.h> // _T(), ...
 #include <stdio.h> // printf(), ...
 #include <stdlib.h> // exit(), ...
 #include <string.h> // strncpy(), ...
+#include <Windows.h>
 
 #pragma comment(lib, "ws2_32") // ws2_32.lib 링크
 
@@ -98,8 +98,7 @@ int main(int argc, char* argv[])
 		printf("\n[TCP 서버] 클라이언트 접속: IP 주소=%s, 포트 번호=%d\n",
 			addr, ntohs(clientaddr.sin_port));
 
-		int fileSize = 0;
-		int curRecved = 0;
+		int fileSize = 0, curRecved = 0, counter = 0;
 
 		// 파일 크기 받기
 		retval = recv(client_sock, (char*)&fileSize, sizeof(int), MSG_WAITALL);
@@ -111,16 +110,25 @@ int main(int argc, char* argv[])
 		printf("[TCP 서버] 받은 파일 크기: %d\n", fileSize);
 
 		// 파일 이름 받기
-		retval = recv(client_sock, buf, BUFSIZE, MSG_WAITALL);
+		size_t nameLen = 0;
+		retval = recv(client_sock, (char*)&nameLen, sizeof(size_t), MSG_WAITALL);
 		if (retval == SOCKET_ERROR)
 		{
 			err_display("recv()");
 			continue;
 		}
-		buf[retval] = '\0';
+		printf("[TCP 서버] 받은 파일 이름 길이: %d\n", (int)nameLen);
+
+		retval = recv(client_sock, buf, nameLen, MSG_WAITALL);
+		if (retval == SOCKET_ERROR)
+		{
+			err_display("recv()");
+			continue;
+		}
+		buf[nameLen] = '\0';
 		printf("[TCP 서버] 받은 파일 이름: %s\n", buf);
 
-		FILE* fp = fopen(buf, "w");
+		FILE* fp = fopen(buf, "wb");
 		if (fp == NULL)
 		{
 			printf("파일을 열 수 없습니다.\n");
@@ -128,17 +136,33 @@ int main(int argc, char* argv[])
 		else
 		{
 			// 파일 데이터 받기
-			while (curRecved < fileSize)
+			while (1)
 			{
-				retval = recv(client_sock, buf, BUFSIZE, MSG_WAITALL);
+				int remaining = fileSize - curRecved;
+				int recvLen = remaining < BUFSIZE ? remaining : BUFSIZE;
+
+				retval = recv(client_sock, buf, recvLen, MSG_WAITALL);
 				if (retval == SOCKET_ERROR)
 				{
 					err_display("recv()");
 					break;
 				}
+				else if (remaining <= 0 || retval == 0)
+				{
+					system("cls");
+					printf("파일 전송률 : [%.2f%%], %d / %d Bytes\n", (float)curRecved / (float)fileSize * 100, curRecved, fileSize);
+					counter = 0;
+					break;
+				}
 
 				fwrite(buf, 1, retval, fp);
 				curRecved += retval;
+				if (++counter > 10000)
+				{
+					system("cls");
+					printf("파일 전송률 : [%.2f%%], %d / %d Bytes\n", (float)curRecved / (float)fileSize * 100, curRecved, fileSize);
+					counter = 0;
+				}
 			}
 
 			fclose(fp);

@@ -5,7 +5,6 @@
 #include <winsock2.h> // 윈속2 메인 헤더
 #include <ws2tcpip.h> // 윈속2 확장 헤더
 
-#include <tchar.h> // _T(), ...
 #include <stdio.h> // printf(), ...
 #include <stdlib.h> // exit(), ...
 #include <string.h> // strncpy(), ...
@@ -106,22 +105,26 @@ int main(int argc, char* argv[])
 
 		// 파일 이름 정보 보내기
 		size_t nameLen = strlen(argv[1]);
+		retval = send(sock, (char*)&nameLen, sizeof(size_t), 0);
+		if (retval == SOCKET_ERROR) { err_display("send()"); }
+		printf("[TCP 클라이언트] 파일 이름 길이: %d바이트를 보냈습니다.\n", (int)sizeof(size_t));
+
 		retval = send(sock, argv[1], nameLen, 0);
 		if (retval == SOCKET_ERROR)	{ err_display("send()"); }
 		printf("[TCP 클라이언트] 파일 이름: %d바이트를 보냈습니다.\n", (int)nameLen);
 
 		// 파일 데이터 보내기
-		while (fread(buf, 1, BUFSIZE, fp) != NULL)
+		int sendLen = 0;
+		while ((sendLen = fread(buf, 1, BUFSIZE, fp)) != NULL)
 		{
-			retval = send(sock, buf, BUFSIZE, 0);
+			retval = send(sock, buf, sendLen, 0);
 			if (retval == SOCKET_ERROR)
 			{
 				err_display("send()");
 				break;
 			}
-			printf("[TCP 클라이언트] 파일 데이터: %d바이트를 보냈습니다.\n", retval);
 		}
-		printf("%d\n", ftell(fp));
+		printf("[TCP 클라이언트] 파일 수신 종료.\n");
 
 		fclose(fp);
 	}
