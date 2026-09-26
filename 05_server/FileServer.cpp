@@ -1,58 +1,34 @@
 #pragma once
-#define _CRT_SECURE_NO_WARNINGS // 구형 C 함수 사용 시 경고 끄기
-#define _WINSOCK_DEPRECATED_NO_WARNINGS // 구형 소켓 API 사용 시 경고 끄기
+#define _CRT_SECURE_NO_WARNINGS
+#define _WINSOCK_DEPRECATED_NO_WARNINGS
 
-#include <winsock2.h> // 윈속2 메인 헤더
-#include <ws2tcpip.h> // 윈속2 확장 헤더
+#include <winsock2.h>
+#include <ws2tcpip.h>
 
-#include <stdio.h> // printf(), ...
-#include <stdlib.h> // exit(), ...
-#include <string.h> // strncpy(), ...
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <Windows.h>
 
-#pragma comment(lib, "ws2_32") // ws2_32.lib 링크
+#pragma comment(lib, "ws2_32")
 
 #define SERVERPORT 9000
-#define BUFSIZE    4096
+#define BUFSIZE    4096 //최대 4KB(=메모리 1페이지 크기) 수신
 
-// 소켓 함수 오류 출력 후 종료
-void err_quit(const char* msg)
+//파일 정보 헤더(파일 크기, 파일 이름 길이), 패딩 없도록 pragma pack
+#pragma pack(1)
+struct FileInfo
 {
-	LPVOID lpMsgBuf;
-	FormatMessageA(
-		FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
-		NULL, WSAGetLastError(),
-		MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-		(char*)&lpMsgBuf, 0, NULL);
-	MessageBoxA(NULL, (const char*)lpMsgBuf, msg, MB_ICONERROR);
-	LocalFree(lpMsgBuf);
-	exit(1);
-}
+	int fileSize;
+	size_t nameLen;
+};
+#pragma pack()
 
-// 소켓 함수 오류 출력
-void err_display(const char* msg)
+//에러 처리용 함수
+void stopConnect(SOCKET& sock, char* addr, struct sockaddr_in& sockaddr)
 {
-	LPVOID lpMsgBuf;
-	FormatMessageA(
-		FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
-		NULL, WSAGetLastError(),
-		MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-		(char*)&lpMsgBuf, 0, NULL);
-	printf("[%s] %s\n", msg, (char*)lpMsgBuf);
-	LocalFree(lpMsgBuf);
-}
-
-// 소켓 함수 오류 출력
-void err_display(int errcode)
-{
-	LPVOID lpMsgBuf;
-	FormatMessageA(
-		FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
-		NULL, errcode,
-		MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-		(char*)&lpMsgBuf, 0, NULL);
-	printf("[오류] %s\n", (char*)lpMsgBuf);
-	LocalFree(lpMsgBuf);
+	closesocket(sock);
+	printf("[TCP 서버] 클라이언트 종료: IP 주소=%s, 포트 번호=%d\n", addr, ntohs(sockaddr.sin_port));
 }
 
 int main(int argc, char* argv[])
@@ -63,115 +39,111 @@ int main(int argc, char* argv[])
 	if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
 		return 1;
 
+	//listen용 소켓 생성
 	SOCKET listen_sock = socket(AF_INET, SOCK_STREAM, 0);
-	if (listen_sock == INVALID_SOCKET) err_quit("socket()");
+	if (listen_sock == INVALID_SOCKET) exit(1);
 
-	// bind()
+	//bind()로 로컬 IP주소, 포트 번호 결정
 	struct sockaddr_in serveraddr;
 	memset(&serveraddr, 0, sizeof(serveraddr));
 	serveraddr.sin_family = AF_INET;
+	//모든 연결 요청 수신할 수 있도록 INADDR_ANY
 	serveraddr.sin_addr.s_addr = htonl(INADDR_ANY);
 	serveraddr.sin_port = htons(SERVERPORT);
+	//bind 후 정보 저장 및 오류 체크
 	retval = bind(listen_sock, (struct sockaddr*)&serveraddr, sizeof(serveraddr));
-	if (retval == SOCKET_ERROR) err_quit("bind()");
+	if (retval == SOCKET_ERROR) exit(1);
 
-	// listen()
+	//listen() 후 클라이언트 접속 대기
 	retval = listen(listen_sock, SOMAXCONN);
-	if (retval == SOCKET_ERROR) err_quit("listen()");
+	if (retval == SOCKET_ERROR) exit(1);
 
+	//클라이언트 소켓 정보
 	SOCKET client_sock;
 	struct sockaddr_in clientaddr;
 	int addrlen;
+	//데이터 수신용 버퍼
 	char buf[BUFSIZE];
 
 	while (1) {
-		// accept()
+		// accept() 후 클라이언트 소켓 정보 저장 및 오류 체크
 		addrlen = sizeof(clientaddr);
 		client_sock = accept(listen_sock, (struct sockaddr*)&clientaddr, &addrlen);
-		if (client_sock == INVALID_SOCKET) {
-			err_display("accept()");
-			break;
-		}
+		if (client_sock == INVALID_SOCKET) { printf("ERROR::accept()");	break; }
 
+		//IP주소를 문자열로 저장하기 위한 버퍼와 inet_ntop 함수
 		char addr[INET_ADDRSTRLEN];
 		inet_ntop(AF_INET, &clientaddr.sin_addr, addr, sizeof(addr));
-		printf("\n[TCP 서버] 클라이언트 접속: IP 주소=%s, 포트 번호=%d\n",
-			addr, ntohs(clientaddr.sin_port));
+		printf("\n[TCP 서버] 클라이언트 접속: IP 주소=%s, 포트 번호=%d\n",	addr, ntohs(clientaddr.sin_port));
 
-		int fileSize = 0, curRecved = 0, counter = 0;
+		//전체 파일 바이트, 현재 받은 바이트, 수신 횟수 갱신 카운터
+		int curRecved = 0, counter = 0;
+		struct FileInfo fInfo;
 
-		// 파일 크기 받기
-		retval = recv(client_sock, (char*)&fileSize, sizeof(int), MSG_WAITALL);
+		//파일 크기 받기 (실패 시 소켓 닫기)
+		retval = recv(client_sock, (char*)&fInfo, sizeof(struct FileInfo), MSG_WAITALL);
 		if (retval == SOCKET_ERROR)
-		{
-			err_display("recv()");
+		{ 
+			printf("ERROR::recv()"); 
+			stopConnect(client_sock, addr, clientaddr); 
 			continue;
 		}
-		printf("[TCP 서버] 받은 파일 크기: %d\n", fileSize);
+		printf("[TCP 서버] 받은 파일 크기: %d\n", fInfo.fileSize);
+		printf("[TCP 서버] 받은 파일 이름 길이: %d\n", (int)fInfo.nameLen);
 
-		// 파일 이름 받기
-		size_t nameLen = 0;
-		retval = recv(client_sock, (char*)&nameLen, sizeof(size_t), MSG_WAITALL);
+		//파일 이름 길이만큼 파일 이름 받기 (실패 시 소켓 닫기)
+		retval = recv(client_sock, buf, sizeof(char) * fInfo.nameLen, MSG_WAITALL);
 		if (retval == SOCKET_ERROR)
 		{
-			err_display("recv()");
+			printf("ERROR::recv()");
+			stopConnect(client_sock, addr, clientaddr);
 			continue;
 		}
-		printf("[TCP 서버] 받은 파일 이름 길이: %d\n", (int)nameLen);
-
-		retval = recv(client_sock, buf, nameLen, MSG_WAITALL);
-		if (retval == SOCKET_ERROR)
-		{
-			err_display("recv()");
-			continue;
-		}
-		buf[nameLen] = '\0';
+		buf[fInfo.nameLen] = '\0';
 		printf("[TCP 서버] 받은 파일 이름: %s\n", buf);
 
+		//바이너리 쓰기 모드 파일 생성
 		FILE* fp = fopen(buf, "wb");
+		//파일 오픈 실패 시 소켓 닫기
 		if (fp == NULL)
 		{
 			printf("파일을 열 수 없습니다.\n");
 		}
 		else
 		{
-			// 파일 데이터 받기
 			while (1)
 			{
-				int remaining = fileSize - curRecved;
+				//남은 데이터 용량 계산
+				int remaining = fInfo.fileSize - curRecved;
+				//BUFSIZE보다 데이터가 적게 남았을 경우 남은 만큼만 받기
 				int recvLen = remaining < BUFSIZE ? remaining : BUFSIZE;
 
+				//데이터를 버퍼에 저장
 				retval = recv(client_sock, buf, recvLen, MSG_WAITALL);
-				if (retval == SOCKET_ERROR)
-				{
-					err_display("recv()");
-					break;
-				}
-				else if (remaining <= 0 || retval == 0)
+
+				//에러 시 수신 중단
+				if (retval == SOCKET_ERROR) { printf("ERROR::recv()");	break; }
+				//수신 횟수 10000 이상 또는 데이터 수신이 없는 경우 전송률 갱신(printf 호출이 많아질수록 성능이 저하되므로 제한)
+				else if (++counter >= 10000 || retval == 0)
 				{
 					system("cls");
-					printf("파일 전송률 : [%.2f%%], %d / %d Bytes\n", (float)curRecved / (float)fileSize * 100, curRecved, fileSize);
+					printf("파일 전송률 : [%.2f%%], %d / %d Bytes\n", (float)curRecved / (float)fInfo.fileSize * 100, curRecved, fInfo.fileSize);
 					counter = 0;
-					break;
+					//데이터 수신 없는 경우 break
+					if (retval == 0) break;
 				}
 
+				//파일에 데이터 작성
 				fwrite(buf, 1, retval, fp);
+				//수신 횟수 갱신
 				curRecved += retval;
-				if (++counter > 10000)
-				{
-					system("cls");
-					printf("파일 전송률 : [%.2f%%], %d / %d Bytes\n", (float)curRecved / (float)fileSize * 100, curRecved, fileSize);
-					counter = 0;
-				}
 			}
-
 			fclose(fp);
 		}
 
 		// 소켓 닫기
 		closesocket(client_sock);
-		printf("[TCP 서버] 클라이언트 종료: IP 주소=%s, 포트 번호=%d\n",
-			addr, ntohs(clientaddr.sin_port));
+		printf("[TCP 서버] 클라이언트 종료: IP 주소=%s, 포트 번호=%d\n", addr, ntohs(clientaddr.sin_port));
 	}
 
 	// 소켓 닫기

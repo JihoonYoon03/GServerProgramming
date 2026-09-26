@@ -1,87 +1,57 @@
 #pragma once
-#define _CRT_SECURE_NO_WARNINGS // 구형 C 함수 사용 시 경고 끄기
-#define _WINSOCK_DEPRECATED_NO_WARNINGS // 구형 소켓 API 사용 시 경고 끄기
+#define _CRT_SECURE_NO_WARNINGS
+#define _WINSOCK_DEPRECATED_NO_WARNINGS
 
-#include <winsock2.h> // 윈속2 메인 헤더
-#include <ws2tcpip.h> // 윈속2 확장 헤더
+#include <winsock2.h>
+#include <ws2tcpip.h>
 
-#include <stdio.h> // printf(), ...
-#include <stdlib.h> // exit(), ...
-#include <string.h> // strncpy(), ...
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
-#pragma comment(lib, "ws2_32") // ws2_32.lib 링크
+#pragma comment(lib, "ws2_32")
 
 #define SERVERPORT 9000
 #define BUFSIZE    4096
 
-// 소켓 함수 오류 출력 후 종료
-void err_quit(const char* msg)
+//파일 정보 헤더(파일 크기, 파일 이름 길이), 패딩 없도록 pragma pack
+#pragma pack(1)
+struct FileInfo
 {
-	LPVOID lpMsgBuf;
-	FormatMessageA(
-		FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
-		NULL, WSAGetLastError(),
-		MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-		(char*)&lpMsgBuf, 0, NULL);
-	MessageBoxA(NULL, (const char*)lpMsgBuf, msg, MB_ICONERROR);
-	LocalFree(lpMsgBuf);
-	exit(1);
-}
-
-// 소켓 함수 오류 출력
-void err_display(const char* msg)
-{
-	LPVOID lpMsgBuf;
-	FormatMessageA(
-		FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
-		NULL, WSAGetLastError(),
-		MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-		(char*)&lpMsgBuf, 0, NULL);
-	printf("[%s] %s\n", msg, (char*)lpMsgBuf);
-	LocalFree(lpMsgBuf);
-}
-
-// 소켓 함수 오류 출력
-void err_display(int errcode)
-{
-	LPVOID lpMsgBuf;
-	FormatMessageA(
-		FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
-		NULL, errcode,
-		MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-		(char*)&lpMsgBuf, 0, NULL);
-	printf("[오류] %s\n", (char*)lpMsgBuf);
-	LocalFree(lpMsgBuf);
-}
+	int fileSize;
+	size_t nameLen;
+};
+#pragma pack()
 
 int main(int argc, char* argv[])
 {
 	int retval;
+	if (argc < 2) return 0;
 
-	if (argc < 2)
-		return 0;
-
-	// 윈속 초기화
+	//윈속 초기화
 	WSADATA wsa;
 	if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
 		return 1;
 
-	// 소켓 생성
+	//소켓 생성
 	SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
-	if (sock == INVALID_SOCKET) err_quit("socket()");
+	if (sock == INVALID_SOCKET) exit(1);
 
-	// connect()
+	//서버 주소정보를 담는 serveraddr
 	struct sockaddr_in serveraddr;
 	memset(&serveraddr, 0, sizeof(serveraddr));
 	serveraddr.sin_family = AF_INET;
+	//본인 컴퓨터 IP로 접속
 	inet_pton(AF_INET, "127.0.0.1", &serveraddr.sin_addr);
 	serveraddr.sin_port = htons(SERVERPORT);
+	//서버에 connect()
 	retval = connect(sock, (struct sockaddr*)&serveraddr, sizeof(serveraddr));
-	if (retval == SOCKET_ERROR) err_quit("connect()");
+	if (retval == SOCKET_ERROR) exit(1);
 
-
+	//데이터 수신용 버퍼
 	char buf[BUFSIZE];
 
+	//바이너리 읽기 모드로 파일 열기
 	FILE* fp = fopen(argv[1], "rb");
 	if (fp == NULL)
 	{
@@ -89,43 +59,36 @@ int main(int argc, char* argv[])
 	}
 	else
 	{
-		// 파일 사이즈 읽기
+		struct FileInfo fInfo;
+
+		//파일 사이즈 읽기
+		//파일 위치 지시자를 맨 뒤로 옮기고, ftell()을 통해 파일 시작에서 얼마나 떨어졌는지 계산
 		fseek(fp, 0, SEEK_END);
-		int fileSize = ftell(fp);
+		fInfo.fileSize = ftell(fp);
+		fInfo.nameLen = strlen(argv[1]);
 		
+		//위치 지시자 위치를 파일 시작으로 초기화
 		fseek(fp, 0, SEEK_SET);
 
-		// 파일 사이즈 정보 보내기
-		retval = send(sock, (char*)&fileSize, sizeof(int), 0);
-		if (retval == SOCKET_ERROR)
-		{
-			err_display("send()");
-		}
-		printf("[TCP 클라이언트] 파일 사이즈: %d바이트를 보냈습니다.\n", fileSize);
-
-		// 파일 이름 정보 보내기
-		size_t nameLen = strlen(argv[1]);
-		retval = send(sock, (char*)&nameLen, sizeof(size_t), 0);
-		if (retval == SOCKET_ERROR) { err_display("send()"); }
+		//파일 사이즈, 파일 이름 길이 정보 보내기
+		retval = send(sock, (char*)&fInfo, sizeof(struct FileInfo), 0);
+		if (retval == SOCKET_ERROR)	{ printf("ERROR::send()"); }
+		printf("[TCP 클라이언트] 파일 사이즈: %d바이트를 보냈습니다.\n", fInfo.fileSize);
 		printf("[TCP 클라이언트] 파일 이름 길이: %d바이트를 보냈습니다.\n", (int)sizeof(size_t));
 
-		retval = send(sock, argv[1], nameLen, 0);
-		if (retval == SOCKET_ERROR)	{ err_display("send()"); }
-		printf("[TCP 클라이언트] 파일 이름: %d바이트를 보냈습니다.\n", (int)nameLen);
+		//파일 이름 보내기
+		retval = send(sock, argv[1], sizeof(char) * fInfo.nameLen, 0);
+		if (retval == SOCKET_ERROR)	{ printf("ERROR::send()"); }
+		printf("[TCP 클라이언트] 파일 이름: %d바이트를 보냈습니다.\n", (int)fInfo.nameLen);
 
-		// 파일 데이터 보내기
+		//파일 바이너리 데이터 보내기. 보낼 데이터가 더 없다면 루프 종료
 		int sendLen = 0;
 		while ((sendLen = fread(buf, 1, BUFSIZE, fp)) != NULL)
 		{
 			retval = send(sock, buf, sendLen, 0);
-			if (retval == SOCKET_ERROR)
-			{
-				err_display("send()");
-				break;
-			}
+			if (retval == SOCKET_ERROR)	{ printf("ERROR::send()");	break; }
 		}
 		printf("[TCP 클라이언트] 파일 수신 종료.\n");
-
 		fclose(fp);
 	}
 
