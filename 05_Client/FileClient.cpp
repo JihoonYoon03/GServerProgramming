@@ -12,7 +12,7 @@
 #pragma comment(lib, "ws2_32")
 
 #define SERVERPORT 9000
-#define BUFSIZE    4096
+#define BUFSIZE    512
 
 //파일 정보 헤더(파일 크기, 파일 이름 길이), 패딩 없도록 pragma pack
 #pragma pack(1)
@@ -48,7 +48,7 @@ int main(int argc, char* argv[])
 	retval = connect(sock, (struct sockaddr*)&serveraddr, sizeof(serveraddr));
 	if (retval == SOCKET_ERROR) exit(1);
 
-	//데이터 수신용 버퍼
+	//데이터 송신용 버퍼
 	char buf[BUFSIZE];
 
 	//바이너리 읽기 모드로 파일 열기
@@ -73,13 +73,16 @@ int main(int argc, char* argv[])
 		//파일 사이즈, 파일 이름 길이 정보 보내기
 		retval = send(sock, (char*)&fInfo, sizeof(struct FileInfo), 0);
 		if (retval == SOCKET_ERROR)	{ printf("ERROR::send()"); }
-		printf("[TCP 클라이언트] 파일 사이즈: %d바이트를 보냈습니다.\n", fInfo.fileSize);
-		printf("[TCP 클라이언트] 파일 이름 길이: %d바이트를 보냈습니다.\n", (int)sizeof(size_t));
 
 		//파일 이름 보내기
 		retval = send(sock, argv[1], sizeof(char) * fInfo.nameLen, 0);
 		if (retval == SOCKET_ERROR)	{ printf("ERROR::send()"); }
-		printf("[TCP 클라이언트] 파일 이름: %d바이트를 보냈습니다.\n", (int)fInfo.nameLen);
+		printf(
+			"[TCP 클라이언트] 파일 이름: %d바이트를 보냈습니다.\n"
+			"[TCP 클라이언트] 파일 이름 길이: %d바이트를 보냈습니다.\n"
+			"[TCP 클라이언트] 파일 사이즈: %d바이트를 보냈습니다.\n",
+			(int)fInfo.nameLen, (int)sizeof(size_t), fInfo.fileSize
+		);
 
 		//파일 바이너리 데이터 보내기. 보낼 데이터가 더 없다면 루프 종료
 		int sendLen = 0;
@@ -88,7 +91,7 @@ int main(int argc, char* argv[])
 			retval = send(sock, buf, sendLen, 0);
 			if (retval == SOCKET_ERROR)	{ printf("ERROR::send()");	break; }
 		}
-		printf("[TCP 클라이언트] 파일 수신 종료.\n");
+		printf("[TCP 클라이언트] 파일 송신 종료.\n");
 		fclose(fp);
 	}
 

@@ -10,10 +10,14 @@
 #include <string.h>
 #include <Windows.h>
 
+#include <chrono>
+#include <profileapi.h>
+
 #pragma comment(lib, "ws2_32")
 
 #define SERVERPORT 9000
-#define BUFSIZE    4096 //최대 4KB(=메모리 1페이지 크기) 수신
+//최대 4KB(=메모리 1페이지 크기) 수신. 4KB 시 평균 3000ms, 512Bytes 시 평균 5000ms 소요
+#define BUFSIZE    4096
 
 //파일 정보 헤더(파일 크기, 파일 이름 길이), 패딩 없도록 pragma pack
 #pragma pack(1)
@@ -65,6 +69,10 @@ int main(int argc, char* argv[])
 	//데이터 수신용 버퍼
 	char buf[BUFSIZE];
 
+	//성능측정
+	LARGE_INTEGER Frequency, StartTime, EndTime;
+	QueryPerformanceFrequency(&Frequency);
+	//Ctrl + C 입력 전까지 반복
 	while (1) {
 		// accept() 후 클라이언트 소켓 정보 저장 및 오류 체크
 		addrlen = sizeof(clientaddr);
@@ -88,8 +96,6 @@ int main(int argc, char* argv[])
 			stopConnect(client_sock, addr, clientaddr); 
 			continue;
 		}
-		printf("[TCP 서버] 받은 파일 크기: %d\n", fInfo.fileSize);
-		printf("[TCP 서버] 받은 파일 이름 길이: %d\n", (int)fInfo.nameLen);
 
 		//파일 이름 길이만큼 파일 이름 받기 (실패 시 소켓 닫기)
 		retval = recv(client_sock, buf, sizeof(char) * fInfo.nameLen, MSG_WAITALL);
@@ -100,7 +106,12 @@ int main(int argc, char* argv[])
 			continue;
 		}
 		buf[fInfo.nameLen] = '\0';
-		printf("[TCP 서버] 받은 파일 이름: %s\n", buf);
+		printf(
+			"[TCP 서버] 받은 파일 이름: %s\n"
+			"[TCP 서버] 받은 파일 이름 길이 : % d\n"
+			"[TCP 서버] 받은 파일 크기: %d\n", 
+			buf, (int)fInfo.nameLen, fInfo.fileSize
+		);
 
 		//바이너리 쓰기 모드 파일 생성
 		FILE* fp = fopen(buf, "wb");
@@ -111,6 +122,8 @@ int main(int argc, char* argv[])
 		}
 		else
 		{
+			QueryPerformanceCounter(&StartTime);
+			printf("\n");
 			while (1)
 			{
 				//남은 데이터 용량 계산
@@ -124,9 +137,9 @@ int main(int argc, char* argv[])
 				//에러 시 수신 중단
 				if (retval == SOCKET_ERROR) { printf("ERROR::recv()");	break; }
 				//수신 횟수 10000 이상 또는 데이터 수신이 없는 경우 전송률 갱신(printf 호출이 많아질수록 성능이 저하되므로 제한)
-				else if (++counter >= 10000 || retval == 0)
+				else if (++counter >= 10000 * (4096 / BUFSIZE) || retval == 0)
 				{
-					system("cls");
+					printf("\033[1A\033[2K");
 					printf("파일 전송률 : [%.2f%%], %d / %d Bytes\n", (float)curRecved / (float)fInfo.fileSize * 100, curRecved, fInfo.fileSize);
 					counter = 0;
 					//데이터 수신 없는 경우 break
@@ -138,6 +151,8 @@ int main(int argc, char* argv[])
 				//수신 횟수 갱신
 				curRecved += retval;
 			}
+			QueryPerformanceCounter(&EndTime);
+			printf("파일 수신 완료. 소요 시간: %.2lf초\n", (EndTime.QuadPart - StartTime.QuadPart) / (double)Frequency.QuadPart);
 			fclose(fp);
 		}
 
