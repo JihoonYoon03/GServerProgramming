@@ -10,8 +10,6 @@
 #include <string.h>
 #include <Windows.h>
 
-#include <chrono>
-
 #pragma comment(lib, "ws2_32")
 
 #define SERVERPORT 9000
@@ -164,6 +162,9 @@ int main(int argc, char* argv[])
 	int retval = 0;
 
 	hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+	
+	GetConsoleScreenBufferInfo(hConsole, &curScreen);
+	cursorEnds = curScreen.dwCursorPosition;
 
 	WSADATA wsa;
 	if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
